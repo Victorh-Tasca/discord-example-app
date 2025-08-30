@@ -8,185 +8,71 @@ import {
   MessageComponentTypes,
   verifyKeyMiddleware,
 } from 'discord-interactions';
-import { getRandomEmoji, DiscordRequest } from './utils.js';
-import { getShuffledOptions, getResult } from './game.js';
+import { DiscordRequest } from './utils.js';
 
-// Create an express app
+// Criar o app express
 const app = express();
-// Get port, or default to 3000
+// Definir a porta
 const PORT = process.env.PORT || 3000;
-// To keep track of our active games
-const activeGames = {};
+// Armazenar as rifas ativas em memória
+const activeRaffles = {};
 
 /**
- * Interactions endpoint URL where Discord will send HTTP requests
- * Parse request body and verifies incoming requests using discord-interactions package
+ * Endpoint de interações onde o Discord enviará as requisições HTTP
  */
 app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async function (req, res) {
-  // Interaction id, type and data
-  const { id, type, data } = req.body;
+  const { type, id, data, member } = req.body;
 
   /**
-   * Handle verification requests
+   * Trata a verificação (PING) do Discord
    */
   if (type === InteractionType.PING) {
     return res.send({ type: InteractionResponseType.PONG });
   }
 
   /**
-   * Handle slash command requests
-   * See https://discord.com/developers/docs/interactions/application-commands#slash-commands
+   * Trata os comandos slash
    */
   if (type === InteractionType.APPLICATION_COMMAND) {
     const { name } = data;
-    
-    if (type === InteractionType.MESSAGE_COMPONENT) {
-      // custom_id set in payload when sending message component
-      const componentId = data.custom_id;
+    const userId = member.user.id;
 
-      if (componentId.startsWith('accept_button_')) {
-        // get the associated game ID
-        const gameId = componentId.replace('accept_button_', '');
-        // Delete message with token in request body
-        const endpoint = `webhooks/${process.env.APP_ID}/${req.body.token}/messages/${req.body.message.id}`;
-        try {
-          await res.send({
-            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-            data: {
-              // Indicates it'll be an ephemeral message
-              flags: InteractionResponseFlags.EPHEMERAL | InteractionResponseFlags.IS_COMPONENTS_V2,
-              components: [
-                {
-                  type: MessageComponentTypes.TEXT_DISPLAY,
-                  content: 'What is your object of choice?',
-                },
-                {
-                  type: MessageComponentTypes.ACTION_ROW,
-                  components: [
-                    {
-                      type: MessageComponentTypes.STRING_SELECT,
-                      // Append game ID
-                      custom_id: `select_choice_${gameId}`,
-                      options: getShuffledOptions(),
-                    },
-                  ],
-                },
-              ],
-            },
-          });
-          // Delete previous message
-          await DiscordRequest(endpoint, { method: 'DELETE' });
-        } catch (err) {
-          console.error('Error sending message:', err);
-        }
-      } else if (componentId.startsWith('select_choice_')) {
-        // get the associated game ID
-        const gameId = componentId.replace('select_choice_', '');
-
-        if (activeGames[gameId]) {
-          // Interaction context
-          const context = req.body.context;
-          // Get user ID and object choice for responding user
-          // User ID is in user field for (G)DMs, and member for servers
-          const userId = context === 0 ? req.body.member.user.id : req.body.user.id;
-          const objectName = data.values[0];
-          // Calculate result from helper function
-          const resultStr = getResult(activeGames[gameId], {
-            id: userId,
-            objectName,
-          });
-
-          // Remove game from storage
-          delete activeGames[gameId];
-          // Update message with token in request body
-          const endpoint = `webhooks/${process.env.APP_ID}/${req.body.token}/messages/${req.body.message.id}`;
-
-          try {
-            // Send results
-            await res.send({
-              type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-              data: {
-                flags: InteractionResponseFlags.IS_COMPONENTS_V2,
-                components: [
-                  {
-                    type: MessageComponentTypes.TEXT_DISPLAY,
-                    content: resultStr
-                  }
-                ]
-              },
-            });
-            // Update ephemeral message
-            await DiscordRequest(endpoint, {
-              method: 'PATCH',
-              body: {
-                components: [
-                  {
-                    type: MessageComponentTypes.TEXT_DISPLAY,
-                    content: 'Nice choice ' + getRandomEmoji()
-                  }
-                ],
-              },
-            });
-          } catch (err) {
-            console.error('Error sending message:', err);
-          }
-        }
-      }
-
-      return;
-    }
-
-    // "test" command
-    if (name === 'test') {
-      // Send a message into the channel where command was triggered from
+    // Comando "ajuda"
+    if (name === 'ajuda') {
       return res.send({
         type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
         data: {
-          flags: InteractionResponseFlags.IS_COMPONENTS_V2,
-          components: [
-            {
-              type: MessageComponentTypes.TEXT_DISPLAY,
-              // Fetches a random emoji to send from a helper function
-              content: `Olá! ${getRandomEmoji()}`
-            }
-          ]
+          content: '**Como usar o Bot de Rifa:**\n\n1. `/iniciar_rifa [premio]`: Começa uma nova rifa. O prêmio é o que você escrever.\n2. `/sortear [id_da_rifa]`: Sorteia um vencedor. O ID da rifa é enviado quando você a cria.',
+          flags: InteractionResponseFlags.EPHEMERAL,
         },
       });
     }
-    // "challenge" command
-    if (name === 'challenge' && id) {
-      // Interaction context
-      const context = req.body.context;
-      // User ID is in user field for (G)DMs, and member for servers
-      const userId = context === 0 ? req.body.member.user.id : req.body.user.id;
-      // User's object choice
-      const objectName = req.body.data.options[0].value;
 
-      // Create active game using message ID as the game ID
-      activeGames[id] = {
-        id: userId,
-        objectName,
+    // Comando "iniciar_rifa"
+    if (name === 'iniciar_rifa') {
+      const prize = data.options[0].value;
+      const raffleId = id; // Usar o ID da interação como ID da rifa
+
+      // Armazena a nova rifa
+      activeRaffles[raffleId] = {
+        prize: prize,
+        creatorId: userId,
+        participants: [],
       };
 
       return res.send({
         type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
         data: {
-          flags: InteractionResponseFlags.IS_COMPONENTS_V2,
+          content: `🎉 **RIFA INICIADA!** 🎉\n\n**Prêmio:** ${prize}\n\nO criador da rifa, <@${userId}>, pode usar o comando \`/sortear id_da_rifa:${raffleId}\` para escolher o vencedor.\n\nClique no botão abaixo para participar!`,
           components: [
-            {
-              type: MessageComponentTypes.TEXT_DISPLAY,
-              // Fetches a random emoji to send from a helper function
-              content: `Rock papers scissors challenge from <@${userId}>`,
-            },
             {
               type: MessageComponentTypes.ACTION_ROW,
               components: [
                 {
                   type: MessageComponentTypes.BUTTON,
-                  // Append the game ID to use later on
-                  custom_id: `accept_button_${req.body.id}`,
-                  label: 'Accept',
-                  style: ButtonStyleTypes.PRIMARY,
+                  custom_id: `enter_raffle_${raffleId}`,
+                  label: 'Participar',
+                  style: ButtonStyleTypes.SUCCESS, // Botão verde
                 },
               ],
             },
@@ -194,12 +80,83 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
         },
       });
     }
-    console.error(`unknown command: ${name}`);
-    return res.status(400).json({ error: 'unknown command' });
+
+    // Comando "sortear"
+    if (name === 'sortear') {
+      const raffleId = data.options[0].value;
+      const raffle = activeRaffles[raffleId];
+
+      if (!raffle) {
+        return res.send({
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: { content: 'Essa rifa não foi encontrada ou já terminou.', flags: InteractionResponseFlags.EPHEMERAL },
+        });
+      }
+
+      if (raffle.creatorId !== userId) {
+        return res.send({
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: { content: 'Apenas quem criou a rifa pode sorteá-la.', flags: InteractionResponseFlags.EPHEMERAL },
+        });
+      }
+      
+      const participants = raffle.participants;
+      if (participants.length === 0) {
+        delete activeRaffles[raffleId]; // Limpa a rifa
+        return res.send({
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: { content: `A rifa para "${raffle.prize}" terminou sem nenhum participante.` },
+        });
+      }
+
+      // Escolhe um vencedor aleatório
+      const winner = participants[Math.floor(Math.random() * participants.length)];
+      delete activeRaffles[raffleId]; // Remove a rifa da lista de ativas
+
+      return res.send({
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: `🎉 O vencedor da rifa para **${raffle.prize}** é... <@${winner.id}>! Parabéns! 🎉`,
+        },
+      });
+    }
   }
 
-  console.error('unknown interaction type', type);
-  return res.status(400).json({ error: 'unknown interaction type' });
+  /**
+   * Trata interações com componentes (botões)
+   */
+  if (type === InteractionType.MESSAGE_COMPONENT) {
+    const { custom_id } = data;
+
+    if (custom_id.startsWith('enter_raffle_')) {
+      const raffleId = custom_id.replace('enter_raffle_', '');
+      const raffle = activeRaffles[raffleId];
+      const user = member.user;
+
+      if (!raffle) {
+        return res.send({
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: { content: 'Esta rifa não está mais ativa.', flags: InteractionResponseFlags.EPHEMERAL },
+        });
+      }
+
+      // Verifica se o usuário já participou
+      if (raffle.participants.some(p => p.id === user.id)) {
+        return res.send({
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: { content: 'Você já está participando desta rifa!', flags: InteractionResponseFlags.EPHEMERAL },
+        });
+      }
+
+      // Adiciona o participante
+      raffle.participants.push({ id: user.id, username: user.username });
+
+      return res.send({
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: { content: `✅ Você entrou na rifa para **${raffle.prize}**! Boa sorte!`, flags: InteractionResponseFlags.EPHEMERAL },
+      });
+    }
+  }
 });
 
 app.listen(PORT, () => {
