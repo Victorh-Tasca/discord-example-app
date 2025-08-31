@@ -10,13 +10,20 @@ const commands = [
     
   new SlashCommandBuilder()
     .setName('encerrar_rifa')
-    .setDescription('Encerra uma rifa manualmente antes do tempo previsto.')
+    .setDescription('Encerra e sorteia o vencedor de uma rifa ativa.')
     .addStringOption(option => 
       option.setName('id_da_rifa')
-        .setDescription('O ID da rifa que você deseja encerrar.')
+        .setDescription('O ID da rifa que você deseja encerrar e sortear.')
         .setRequired(true)),
 
-  // NOVO COMANDO RÁPIDO PARA TESTES
+  new SlashCommandBuilder()
+    .setName('cancelar_rifa')
+    .setDescription('Cancela uma rifa ativa sem sortear um vencedor.')
+    .addStringOption(option =>
+      option.setName('id_da_rifa')
+        .setDescription('O ID da rifa que você deseja cancelar.')
+        .setRequired(true)),
+
   new SlashCommandBuilder()
     .setName('rifa_rapida')
     .setDescription('Cria uma rifa de teste com valores padrão preenchidos.')
@@ -32,6 +39,11 @@ const commands = [
       option.setName('tickets')
         .setDescription('A quantidade de tickets disponíveis.')
         .setRequired(true)),
+  
+  // NOVO COMANDO DE AJUDA
+  new SlashCommandBuilder()
+    .setName('ajuda')
+    .setDescription('Exibe todos os comandos de administrador disponíveis para o bot.'),
 
 ].map(command => command.toJSON());
 
