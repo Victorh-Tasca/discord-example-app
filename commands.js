@@ -12,35 +12,33 @@ const commands = [
     .setName('encerrar_rifa')
     .setDescription('Encerra e sorteia o vencedor de uma rifa ativa.')
     .addStringOption(option => 
-      option.setName('id_da_rifa')
-        .setDescription('O ID da rifa que você deseja encerrar e sortear.')
-        .setRequired(true)),
+      option.setName('id_da_rifa').setDescription('O ID da rifa que você deseja encerrar e sortear.').setRequired(true)),
 
   new SlashCommandBuilder()
     .setName('cancelar_rifa')
     .setDescription('Cancela uma rifa ativa sem sortear um vencedor.')
     .addStringOption(option =>
-      option.setName('id_da_rifa')
-        .setDescription('O ID da rifa que você deseja cancelar.')
-        .setRequired(true)),
+      option.setName('id_da_rifa').setDescription('O ID da rifa que você deseja cancelar.').setRequired(true)),
+
+  // NOVO COMANDO
+  new SlashCommandBuilder()
+    .setName('listar_rifas')
+    .setDescription('Lista todas as rifas que estão ativas no momento.'),
+  
+  // NOVO COMANDO
+  new SlashCommandBuilder()
+    .setName('listar_participantes')
+    .setDescription('Envia um arquivo com todos os participantes de uma rifa.')
+    .addStringOption(option =>
+      option.setName('id_da_rifa').setDescription('O ID da rifa da qual você quer a lista.').setRequired(true)),
 
   new SlashCommandBuilder()
     .setName('rifa_rapida')
     .setDescription('Cria uma rifa de teste com valores padrão preenchidos.')
-    .addStringOption(option =>
-      option.setName('titulo')
-        .setDescription('O título da rifa de teste.')
-        .setRequired(true))
-    .addNumberOption(option =>
-      option.setName('preco')
-        .setDescription('O preço de cada ticket.')
-        .setRequired(true))
-    .addIntegerOption(option =>
-      option.setName('tickets')
-        .setDescription('A quantidade de tickets disponíveis.')
-        .setRequired(true)),
+    .addStringOption(option => option.setName('titulo').setDescription('O título da rifa.').setRequired(true))
+    .addNumberOption(option => option.setName('preco').setDescription('O preço de cada ticket.').setRequired(true))
+    .addIntegerOption(option => option.setName('tickets').setDescription('A quantidade de tickets.').setRequired(true)),
   
-  // NOVO COMANDO DE AJUDA
   new SlashCommandBuilder()
     .setName('ajuda')
     .setDescription('Exibe todos os comandos de administrador disponíveis para o bot.'),

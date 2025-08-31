@@ -36,6 +36,43 @@ client.once(Events.ClientReady, () => {
 
 
 // --- Funções Auxiliares ---
+
+// Calcula e atualiza a embed da rifa com os contadores corretos
+async function updateRaffleMessage(raffleId) {
+    const { data: raffleData } = await supabase.from('raffles').select('*').eq('id', raffleId).single();
+    if (!raffleData) return;
+
+    const { data: participants } = await supabase.from('participants').select('quantity, status').eq('raffle_id', raffleId);
+
+    let soldTickets = 0;
+    let reservedTickets = 0;
+    if (participants) {
+        participants.forEach(p => {
+            if (p.status === 'CONFIRMED') soldTickets += p.quantity;
+            if (['PENDING_PAYMENT', 'PENDING_APPROVAL'].includes(p.status)) reservedTickets += p.quantity;
+        });
+    }
+
+    const remainingTickets = raffleData.max_tickets - soldTickets - reservedTickets;
+    const reservedText = reservedTickets > 0 ? ` (${reservedTickets} em processo de compra)` : '';
+
+    try {
+        const publishChannel = await client.channels.fetch(raffleData.publish_channel_id);
+        const raffleMessage = await publishChannel.messages.fetch(raffleData.message_id);
+        
+        const updatedEmbed = EmbedBuilder.from(raffleMessage.embeds[0]);
+        const fieldIndex = updatedEmbed.data.fields.findIndex(f => f.name.includes('Tickets'));
+
+        if (fieldIndex !== -1) {
+            updatedEmbed.data.fields[fieldIndex].name = '🎟️ Tickets Restantes';
+            updatedEmbed.data.fields[fieldIndex].value = `${remainingTickets}/${raffleData.max_tickets}${reservedText}`;
+        }
+        await raffleMessage.edit({ embeds: [updatedEmbed] });
+    } catch (error) {
+        console.error("Erro ao atualizar a mensagem da rifa:", error);
+    }
+}
+
 function createRaffleDashboard(sessionData) {
     const embed = new EmbedBuilder()
       .setColor(sessionData.color || '#5865F2')
@@ -100,16 +137,24 @@ async function drawWinner(raffleId, interaction = null) {
 
     const winnerEmbed = new EmbedBuilder().setColor('#FFD700').setTitle(`🎉 Sorteio da Rifa "${raffleData.title}" Realizado! 🎉`);
 
-    if (!participants || participants.length === 0) {
-        winnerEmbed.setDescription('A rifa foi encerrada, mas não houve participantes com pagamento confirmado. Nenhum vencedor foi sorteado.');
+    if (!participants || participants.length === 0 || !participants.some(p => p.ticket_numbers && p.ticket_numbers.length > 0)) {
+        winnerEmbed.setDescription('A rifa foi encerrada, mas não houve participantes com números confirmados. Nenhum vencedor foi sorteado.');
         await publishChannel.send({ embeds: [winnerEmbed] });
         if (interaction) await interaction.editReply({ content: '✅ Rifa encerrada, mas não haviam participantes confirmados.' });
         return;
     }
 
-    const ticketPool = participants.flatMap(p => Array(p.quantity).fill(p.user_id));
-    const winnerId = ticketPool[Math.floor(Math.random() * ticketPool.length)];
-    winnerEmbed.setDescription(`Parabéns ao grande vencedor: <@${winnerId}>! 🥳\n\nVocê ganhou: **${raffleData.title}**\n\nA administração entrará em contato.`);
+    const allTicketNumbers = participants.flatMap(p => p.ticket_numbers);
+    const winningNumber = allTicketNumbers[Math.floor(Math.random() * allTicketNumbers.length)];
+    const winner = participants.find(p => p.ticket_numbers.includes(winningNumber));
+    const winnerId = winner.user_id;
+
+    winnerEmbed.setDescription(
+        `O número da sorte foi **${winningNumber}**!\n\n` +
+        `Parabéns ao grande vencedor: <@${winnerId}>! 🥳\n\n` +
+        `Você ganhou: **${raffleData.title}**\n\n` +
+        `A administração entrará em contato.`
+    );
     await publishChannel.send({ content: `Atenção, <@${winnerId}>!`, embeds: [winnerEmbed] });
 
     if (interaction) {
@@ -121,86 +166,111 @@ async function drawWinner(raffleId, interaction = null) {
 // --- Listener Principal de Interações ---
 client.on(Events.InteractionCreate, async interaction => {
   if (interaction.isChatInputCommand()) {
-    if (interaction.commandName === 'ajuda') {
-        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-            return interaction.reply({ content: '❌ Este comando é exclusivo para administradores.', ephemeral: true });
-        }
-        const helpEmbed = new EmbedBuilder()
-            .setColor('#0099ff')
-            .setTitle('Painel de Ajuda | Comandos de Administrador')
-            .setDescription('Aqui estão todos os comandos disponíveis para gerenciar as rifas.')
-            .addFields(
-                { name: '`/configurar_rifa`', value: 'Abre um painel interativo para criar uma nova rifa com todos os detalhes personalizáveis.' },
-                { name: '`/rifa_rapida`', value: 'Cria uma rifa de teste instantaneamente com valores padrão. Requer `titulo`, `preco` e `tickets`.' },
-                { name: '`/encerrar_rifa`', value: 'Encerra uma rifa ativa e sorteia um vencedor entre os participantes confirmados. Requer o `id_da_rifa`.' },
-                { name: '`/cancelar_rifa`', value: 'Cancela uma rifa ativa sem declarar um vencedor. Edita o anúncio e impede novas participações. Requer o `id_da_rifa`.' },
-                { name: '`/ajuda`', value: 'Exibe esta mensagem de ajuda com a lista de todos os comandos.' }
-            )
-            .setFooter({ text: 'Bot de Rifas' });
-        await interaction.reply({ embeds: [helpEmbed], ephemeral: true });
+    if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        return interaction.reply({ content: '❌ Você precisa ser um administrador para usar este comando.', ephemeral: true });
     }
 
-    if (interaction.commandName === 'configurar_rifa') {
-        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) { return interaction.reply({ content: '❌ Você precisa ser um administrador.', ephemeral: true }); }
-        const sessionId = interaction.user.id;
-        const dashboard = createRaffleDashboard({});
-        const panelMessage = await interaction.reply({ ...dashboard, fetchReply: true });
-        creationSessions.set(sessionId, { panelMessageId: panelMessage.id });
-    }
-    
-    if (interaction.commandName === 'encerrar_rifa') {
-        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) { return interaction.reply({ content: '❌ Você precisa ser um administrador.', ephemeral: true }); }
-        await interaction.deferReply({ ephemeral: true });
-        const raffleId = interaction.options.getString('id_da_rifa');
-        await drawWinner(raffleId, interaction);
-    }
+    switch (interaction.commandName) {
+        case 'ajuda':
+            const helpEmbed = new EmbedBuilder().setColor('#0099ff').setTitle('Painel de Ajuda | Comandos de Administrador')
+                .setDescription('Aqui estão todos os comandos disponíveis para gerenciar as rifas.')
+                .addFields(
+                    { name: '`/configurar_rifa`', value: 'Abre um painel interativo para criar uma nova rifa detalhada.' },
+                    { name: '`/listar_rifas`', value: 'Lista todas as rifas que estão ativas no momento.' },
+                    { name: '`/listar_participantes`', value: 'Gera um arquivo `.txt` com os participantes e números de uma rifa.' },
+                    { name: '`/encerrar_rifa`', value: 'Encerra uma rifa e sorteia um vencedor. Requer o `id_da_rifa`.' },
+                    { name: '`/cancelar_rifa`', value: 'Cancela uma rifa sem um vencedor. Requer o `id_da_rifa`.' },
+                    { name: '`/rifa_rapida`', value: 'Cria uma rifa de teste com valores padrão.' },
+                    { name: '`/ajuda`', value: 'Exibe esta mensagem de ajuda.' }
+                );
+            await interaction.reply({ embeds: [helpEmbed], ephemeral: true });
+            break;
 
-    if (interaction.commandName === 'cancelar_rifa') {
-        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) { return interaction.reply({ content: '❌ Você precisa ser um administrador.', ephemeral: true }); }
-        await interaction.deferReply({ ephemeral: true });
-        const raffleId = interaction.options.getString('id_da_rifa');
-        const { data: raffleData, error } = await supabase.from('raffles').select('*').eq('id', raffleId).single();
-        if (error || !raffleData) { return interaction.editReply({ content: '❌ Rifa não encontrada com este ID.' }); }
-        if (raffleData.is_drawn) { return interaction.editReply({ content: '⚠️ Esta rifa já foi encerrada ou cancelada.' }); }
-        const { error: updateError } = await supabase.from('raffles').update({ is_drawn: true, end_time: new Date().toISOString() }).eq('id', raffleId);
-        if (updateError) { return interaction.editReply({ content: '❌ Ocorreu um erro ao atualizar o status da rifa no banco de dados.' }); }
-        try {
-            const publishChannel = await client.channels.fetch(raffleData.publish_channel_id);
-            const raffleMessage = await publishChannel.messages.fetch(raffleData.message_id);
-            const cancelledEmbed = EmbedBuilder.from(raffleMessage.embeds[0])
-                .setTitle(`❌ RIFA CANCELADA: ${raffleData.title}`)
-                .setColor('#FF0000')
-                .setDescription('Esta rifa foi cancelada pela administração. Participantes que efetuaram o pagamento devem contatar o responsável.');
-            const disabledButton = new ButtonBuilder().setCustomId(`${raffleId}_participate`).setLabel('Rifa Cancelada').setStyle(ButtonStyle.Danger).setDisabled(true);
-            await raffleMessage.edit({ embeds: [cancelledEmbed], components: [new ActionRowBuilder().addComponents(disabledButton)] });
-            await interaction.editReply({ content: `✅ A rifa **"${raffleData.title}"** (\`${raffleId}\`) foi cancelada com sucesso!` });
-        } catch(err) {
-            console.error("Não foi possível editar a mensagem da rifa para cancelar:", err);
-            await interaction.editReply({ content: '⚠️ A rifa foi marcada como cancelada no sistema, mas não foi possível editar a mensagem de anúncio.' });
-        }
-    }
+        case 'configurar_rifa':
+            if (creationSessions.has(interaction.user.id)) {
+                return interaction.reply({ content: '⚠️ Você já tem um painel de criação ativo. Conclua ou cancele a rifa atual antes de iniciar uma nova.', ephemeral: true });
+            }
+            const dashboard = createRaffleDashboard({});
+            const panelMessage = await interaction.reply({ ...dashboard, fetchReply: true });
+            creationSessions.set(interaction.user.id, { panelMessageId: panelMessage.id });
+            break;
 
-    if (interaction.commandName === 'rifa_rapida') {
-        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) { return interaction.reply({ content: '❌ Você precisa ser um administrador.', ephemeral: true }); }
-        await interaction.deferReply({ ephemeral: true });
-        const raffleId = `raffle_${Date.now()}`;
-        const raffleData = {
-            id: raffleId, creator_id: interaction.user.id, title: interaction.options.getString('titulo'), 
-            description: `Rifa de teste para: ${interaction.options.getString('titulo')}.`, price: interaction.options.getNumber('preco'),
-            max_tickets: interaction.options.getInteger('tickets'), start_time: new Date(), end_time: new Date(Date.now() + 24 * 60 * 60 * 1000),
-            pix_key: '123456789', pix_key_type: 'Chave Aleatória', publish_channel_id: process.env.DEFAULT_PUBLISH_CHANNEL_ID,
-            log_channel_id: process.env.DEFAULT_LOGS_CHANNEL_ID,
-        };
-        try {
-          const publishChannel = await client.channels.fetch(raffleData.publish_channel_id);
-          const embed = new EmbedBuilder().setColor('#00FF00').setTitle(`🎉 Rifa Rápida: ${raffleData.title} 🎉`).setDescription(raffleData.description)
-            .addFields( { name: '🎟️ Tickets Restantes', value: `${raffleData.max_tickets}/${raffleData.max_tickets}` }, { name: '💰 Preço por Ticket', value: `R$ ${raffleData.price.toFixed(2)}`}, { name: '▶️ Início', value: `<t:${Math.floor(raffleData.start_time.getTime() / 1000)}:f>` }, { name: '⏹️ Encerramento', value: `<t:${Math.floor(raffleData.end_time.getTime() / 1000)}:f>` } )
-            .setFooter({ text: `ID da Rifa: ${raffleId}` });
-          const participateButton = new ButtonBuilder().setCustomId(`${raffleId}_participate`).setLabel('Quero Participar!').setStyle(ButtonStyle.Success);
-          const raffleMessage = await publishChannel.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(participateButton)] });
-          await supabase.from('raffles').insert({ ...raffleData, message_id: raffleMessage.id });
-          await interaction.editReply({ content: `✅ Rifa de teste publicada com sucesso em ${publishChannel}!`});
-        } catch (error) { await interaction.editReply({ content: `❌ Erro ao criar rifa de teste. Verifique os IDs de canal no .env.` }); }
+        case 'encerrar_rifa':
+            await interaction.deferReply({ ephemeral: true });
+            const raffleIdToEnd = interaction.options.getString('id_da_rifa');
+            await drawWinner(raffleIdToEnd, interaction);
+            break;
+
+        case 'cancelar_rifa':
+            await interaction.deferReply({ ephemeral: true });
+            const raffleIdToCancel = interaction.options.getString('id_da_rifa');
+            const { data: raffleToCancel, error: cancelError } = await supabase.from('raffles').select('*').eq('id', raffleIdToCancel).single();
+            if (cancelError || !raffleToCancel) { return interaction.editReply({ content: '❌ Rifa não encontrada com este ID.' }); }
+            if (raffleToCancel.is_drawn) { return interaction.editReply({ content: '⚠️ Esta rifa já foi encerrada ou cancelada.' }); }
+            await supabase.from('raffles').update({ is_drawn: true, end_time: new Date().toISOString() }).eq('id', raffleIdToCancel);
+            try {
+                const publishChannel = await client.channels.fetch(raffleToCancel.publish_channel_id);
+                const raffleMessage = await publishChannel.messages.fetch(raffleToCancel.message_id);
+                const cancelledEmbed = EmbedBuilder.from(raffleMessage.embeds[0]).setTitle(`❌ RIFA CANCELADA: ${raffleToCancel.title}`).setColor('#FF0000').setDescription('Esta rifa foi cancelada pela administração. Participantes que efetuaram o pagamento devem contatar o responsável.');
+                const disabledButton = new ButtonBuilder().setCustomId(`${raffleIdToCancel}_participate`).setLabel('Rifa Cancelada').setStyle(ButtonStyle.Danger).setDisabled(true);
+                await raffleMessage.edit({ embeds: [cancelledEmbed], components: [new ActionRowBuilder().addComponents(disabledButton)] });
+                await interaction.editReply({ content: `✅ A rifa **"${raffleToCancel.title}"** foi cancelada com sucesso!` });
+            } catch(err) {
+                await interaction.editReply({ content: '⚠️ A rifa foi marcada como cancelada no sistema, mas não foi possível editar a mensagem de anúncio.' });
+            }
+            break;
+        
+        case 'listar_rifas':
+            await interaction.deferReply({ ephemeral: true });
+            const { data: activeRaffles, error: listError } = await supabase.from('raffles').select('id, title, end_time').eq('is_drawn', false);
+            if (listError || !activeRaffles || activeRaffles.length === 0) {
+                return interaction.editReply({ content: 'Não há nenhuma rifa ativa no momento.' });
+            }
+            const listEmbed = new EmbedBuilder().setColor('#0099ff').setTitle('Rifas Ativas')
+                .setDescription(activeRaffles.map(r => `**${r.title}**\n*ID:* \`${r.id}\`\n*Encerra em:* <t:${Math.floor(new Date(r.end_time).getTime() / 1000)}:R>`).join('\n\n'));
+            await interaction.editReply({ embeds: [listEmbed] });
+            break;
+
+        case 'listar_participantes':
+            await interaction.deferReply({ ephemeral: true });
+            const raffleIdToList = interaction.options.getString('id_da_rifa');
+            const { data: raffleToList, error: raffleListError } = await supabase.from('raffles').select('title').eq('id', raffleIdToList).single();
+            if (raffleListError || !raffleToList) { return interaction.editReply({ content: `❌ Rifa com ID \`${raffleIdToList}\` não encontrada.`}); }
+            const { data: participantsToList, error: pListError } = await supabase.from('participants').select('user_id, quantity, ticket_numbers').eq('raffle_id', raffleIdToList).eq('status', 'CONFIRMED');
+            if (pListError || !participantsToList || participantsToList.length === 0) { return interaction.editReply({ content: `A rifa **"${raffleToList.title}"** ainda não tem participantes confirmados.`}); }
+
+            let fileContent = `Lista de Participantes para a Rifa: ${raffleToList.title}\nID: ${raffleIdToList}\n\n`;
+            for (const p of participantsToList) {
+                const user = await client.users.fetch(p.user_id).catch(() => ({ tag: `ID: ${p.user_id}` }));
+                const numbers = p.ticket_numbers ? p.ticket_numbers.join(', ') : 'N/A';
+                fileContent += `${user.tag} (${p.quantity} tickets) - Números: [${numbers}]\n`;
+            }
+
+            const attachment = new AttachmentBuilder(Buffer.from(fileContent, 'utf-8'), { name: `participantes_${raffleIdToList}.txt` });
+            await interaction.editReply({ content: `Aqui está a lista de participantes para a rifa **"${raffleToList.title}"**:`, files: [attachment] });
+            break;
+
+        case 'rifa_rapida':
+            await interaction.deferReply({ ephemeral: true });
+            const raffleId = `raffle_${Date.now()}`;
+            const raffleData = {
+                id: raffleId, creator_id: interaction.user.id, title: interaction.options.getString('titulo'), 
+                description: `Rifa de teste para: ${interaction.options.getString('titulo')}.`, price: interaction.options.getNumber('preco'),
+                max_tickets: interaction.options.getInteger('tickets'), start_time: new Date(), end_time: new Date(Date.now() + 24 * 60 * 60 * 1000),
+                pix_key: '123456789', pix_key_type: 'Chave Aleatória', publish_channel_id: process.env.DEFAULT_PUBLISH_CHANNEL_ID,
+                log_channel_id: process.env.DEFAULT_LOGS_CHANNEL_ID,
+            };
+            try {
+              const publishChannel = await client.channels.fetch(raffleData.publish_channel_id);
+              const embed = new EmbedBuilder().setColor('#00FF00').setTitle(`🎉 Rifa Rápida: ${raffleData.title} 🎉`).setDescription(raffleData.description)
+                .addFields( { name: '🎟️ Tickets Restantes', value: `${raffleData.max_tickets}/${raffleData.max_tickets}` }, { name: '💰 Preço por Ticket', value: `R$ ${raffleData.price.toFixed(2)}`}, { name: '▶️ Início', value: `<t:${Math.floor(raffleData.start_time.getTime() / 1000)}:f>` }, { name: '⏹️ Encerramento', value: `<t:${Math.floor(raffleData.end_time.getTime() / 1000)}:f>` } )
+                .setFooter({ text: `ID da Rifa: ${raffleId}` });
+              const participateButton = new ButtonBuilder().setCustomId(`${raffleId}_participate`).setLabel('Quero Participar!').setStyle(ButtonStyle.Success);
+              const raffleMessage = await publishChannel.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(participateButton)] });
+              await supabase.from('raffles').insert({ ...raffleData, message_id: raffleMessage.id });
+              await interaction.editReply({ content: `✅ Rifa de teste publicada com sucesso em ${publishChannel}!`});
+            } catch (error) { await interaction.editReply({ content: `❌ Erro ao criar rifa de teste. Verifique os IDs de canal no .env.` }); }
+            break;
     }
   }
 
@@ -208,7 +278,6 @@ client.on(Events.InteractionCreate, async interaction => {
     const sessionId = interaction.user.id;
     const sessionData = creationSessions.get(sessionId);
     if (!sessionData) return interaction.update({ content: 'Esta sessão de criação expirou.', embeds: [], components: [] });
-    
     const field = interaction.values[0].replace('set_', '');
     if (field === 'startTime' || field === 'endTime') {
         const modal = new ModalBuilder().setCustomId(`datetime_modal_${field}`).setTitle(`Definir Data de ${field === 'startTime' ? 'Início' : 'Fim'}`);
@@ -265,7 +334,7 @@ client.on(Events.InteractionCreate, async interaction => {
         await interaction.deleteReply().catch(()=>{}); 
     }
   }
-
+  
   if (interaction.isButton() && (interaction.customId === 'publish_raffle' || interaction.customId === 'cancel_raffle')) {
     const sessionId = interaction.user.id;
     const sessionData = creationSessions.get(sessionId);
@@ -373,8 +442,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
   if (interaction.isButton() && interaction.customId.startsWith('cancel_purchase_')) {
     const raffleId = interaction.customId.replace('cancel_purchase_', '');
-    const { error } = await supabase.from('participants').update({ status: 'CANCELLED' }).eq('raffle_id', raffleId).eq('user_id', interaction.user.id).eq('status', 'PENDING_PAYMENT');
-    if (error) { return interaction.update({ content: '❌ Ocorreu um erro ao cancelar.', components: [] }); }
+    await supabase.from('participants').update({ status: 'CANCELLED' }).eq('raffle_id', raffleId).eq('user_id', interaction.user.id).eq('status', 'PENDING_PAYMENT');
     await updateRaffleMessage(raffleId);
     await interaction.update({ content: '✅ Sua intenção de compra foi cancelada. Os tickets foram liberados.', components: [] });
   }
@@ -390,8 +458,11 @@ client.on(Events.InteractionCreate, async interaction => {
     const user = await client.users.fetch(userId);
     const disabledRow = new ActionRowBuilder().addComponents( ButtonBuilder.from(interaction.message.components[0].components[0]).setDisabled(true), ButtonBuilder.from(interaction.message.components[0].components[1]).setDisabled(true) );
     if (action === 'approve') {
-        await supabase.from('participants').update({ status: 'CONFIRMED' }).eq('id', participant.id);
-        await user.send(`✅ Pagamento Aprovado! Sua participação na rifa **"${raffleData.title}"** foi confirmada para **${participant.quantity} número(s)**.`);
+        const { data: existingNumbers } = await supabase.from('participants').select('ticket_numbers').eq('raffle_id', raffleId).eq('status', 'CONFIRMED').not('ticket_numbers', 'is', null);
+        const highestNumber = existingNumbers ? existingNumbers.flatMap(p => p.ticket_numbers || []).reduce((max, num) => Math.max(max, num), 0) : 0;
+        const newNumbers = Array.from({ length: participant.quantity }, (_, i) => highestNumber + i + 1);
+        await supabase.from('participants').update({ status: 'CONFIRMED', ticket_numbers: newNumbers }).eq('id', participant.id);
+        await user.send(`✅ Pagamento Aprovado! Sua participação na rifa **"${raffleData.title}"** foi confirmada.\n**Seus números são: \`${newNumbers.join(', ')}\`**.`);
         await interaction.update({ content: `✅ Pagamento de ${user.tag} aprovado por ${interaction.user.tag}.`, embeds: [interaction.message.embeds[0]], components: [disabledRow]});
     } else {
       await supabase.from('participants').update({ status: 'REFUSED' }).eq('id', participant.id);
