@@ -12,6 +12,7 @@ import {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
+  PermissionsBitField,
 } from 'discord.js';
 import 'dotenv/config';
 
@@ -33,35 +34,77 @@ client.once(Events.ClientReady, () => {
   console.log(`Bot logado como ${client.user.tag}!`);
 });
 
-// --- Funções Auxiliares ---
+
+// --- Funções Auxiliares de Validação ---
+
+async function validateChannel(interaction, channelId, type = 'text') {
+    try {
+        const channel = await interaction.guild.channels.fetch(channelId);
+        if (!channel || channel.type !== ChannelType.GuildText) {
+            await interaction.reply({ content: `❌ O ID fornecido não pertence a um canal de texto válido.`, ephemeral: true });
+            return null;
+        }
+        const botPermissions = channel.permissionsFor(client.user);
+        if (!botPermissions.has(PermissionsBitField.Flags.ViewChannel) || !botPermissions.has(PermissionsBitField.Flags.SendMessages)) {
+            await interaction.reply({ content: `❌ Eu não tenho permissão para ver ou enviar mensagens no canal <#${channelId}>. Por favor, ajuste minhas permissões.`, ephemeral: true });
+            return null;
+        }
+        return channel;
+    } catch (error) {
+        await interaction.reply({ content: `❌ Não foi possível encontrar o canal com o ID \`${channelId}\`. Verifique se o ID está correto.`, ephemeral: true });
+        return null;
+    }
+}
+
+
+// --- Funções Auxiliares de UI ---
+
 function createRaffleDashboard(sessionData) {
     const embed = new EmbedBuilder()
       .setColor(sessionData.color || '#5865F2')
       .setTitle('Painel de Criação de Rifa')
-      .setDescription('Configure os detalhes da sua rifa. Esta mensagem será apagada ao publicar ou cancelar.')
+      .setDescription('Use o menu abaixo para configurar cada detalhe da rifa. A mensagem será apagada ao publicar ou cancelar.')
       .addFields(
           { name: '📝 Título', value: sessionData.title || 'Não definido', inline: true },
           { name: '💰 Preço', value: sessionData.price ? `R$ ${sessionData.price.toFixed(2)}` : 'Não definido', inline: true },
           { name: '🎟️ Tickets', value: String(sessionData.maxTickets || 'Não definido'), inline: true },
           { name: '▶️ Início', value: sessionData.startTime ? `<t:${Math.floor(sessionData.startTime.getTime() / 1000)}:f>` : 'Não definido', inline: true },
           { name: '⏹️ Fim', value: sessionData.endTime ? `<t:${Math.floor(sessionData.endTime.getTime() / 1000)}:f>` : 'Não definido', inline: true },
-          { name: '🎨 Cor', value: sessionData.color || 'Padrão', inline: true },
+          { name: '🎨 Cor (Opcional)', value: sessionData.color || 'Padrão', inline: true },
           { name: '🔑 Chave PIX', value: sessionData.pixKey || 'Não definida', inline: true },
           { name: '✨ Tipo de PIX', value: sessionData.pixKeyType || 'Não definido', inline: true },
           { name: '📢 Anúncio', value: sessionData.publishChannelId ? `<#${sessionData.publishChannelId}>` : 'Não definido', inline: true },
           { name: '📢 Logs', value: sessionData.logChannelId ? `<#${sessionData.logChannelId}>` : 'Não definido', inline: true },
           { name: '📄 Descrição', value: sessionData.description || 'Não definida' },
-          { name: '🖼️ Imagem (URL)', value: sessionData.image || 'Nenhuma' }
+          { name: '🖼️ Imagem (Opcional)', value: sessionData.image || 'Nenhuma' }
       );
   
     const isReadyToPublish = sessionData.title && sessionData.description && sessionData.price && sessionData.maxTickets && sessionData.startTime && sessionData.endTime && sessionData.pixKey && sessionData.pixKeyType && sessionData.publishChannelId && sessionData.logChannelId;
+
+    const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId('config_raffle_menu')
+        .setPlaceholder('Escolha um item para configurar...')
+        .addOptions(
+            { label: 'Título', value: 'set_title', description: 'Define o título principal da rifa.' },
+            { label: 'Descrição', value: 'set_description', description: 'Define o texto da rifa (prêmios, regras, etc.).' },
+            { label: 'Preço', value: 'set_price', description: 'Define o valor de cada ticket.' },
+            { label: 'Quantidade de Tickets', value: 'set_maxTickets', description: 'Define o número máximo de tickets disponíveis.' },
+            { label: 'Data de Início', value: 'set_startTime', description: 'Define quando a rifa começa.' },
+            { label: 'Data de Fim', value: 'set_endTime', description: 'Define quando a rifa termina.' },
+            { label: 'Chave PIX', value: 'set_pixKey', description: 'Define a chave PIX para pagamento.' },
+            { label: 'Tipo de PIX', value: 'set_pixKeyType', description: 'Define o tipo da chave PIX (CPF, Celular, etc.).' },
+            { label: 'Canal de Anúncio', value: 'set_publishChannel', description: 'Define onde a rifa será postada.' },
+            { label: 'Canal de Logs', value: 'set_logChannel', description: 'Define onde os comprovantes serão enviados.' },
+            { label: 'Cor da Embed (Opcional)', value: 'set_color', description: 'Define a cor da barra lateral da embed (HEX).' },
+            { label: 'Imagem (Opcional)', value: 'set_image', description: 'Define uma imagem de capa para a rifa (URL).' }
+        );
   
-    const buttons1 = new ActionRowBuilder().addComponents( new ButtonBuilder().setCustomId('set_title').setLabel('Título').setStyle(ButtonStyle.Secondary), new ButtonBuilder().setCustomId('set_description').setLabel('Descrição').setStyle(ButtonStyle.Secondary), new ButtonBuilder().setCustomId('set_price').setLabel('Preço').setStyle(ButtonStyle.Secondary), new ButtonBuilder().setCustomId('set_image').setLabel('Imagem').setStyle(ButtonStyle.Secondary), new ButtonBuilder().setCustomId('set_color').setLabel('Cor').setStyle(ButtonStyle.Secondary) );
-    const buttons2 = new ActionRowBuilder().addComponents( new ButtonBuilder().setCustomId('set_maxTickets').setLabel('Tickets').setStyle(ButtonStyle.Secondary), new ButtonBuilder().setCustomId('set_startTime').setLabel('Início').setStyle(ButtonStyle.Secondary), new ButtonBuilder().setCustomId('set_endTime').setLabel('Fim').setStyle(ButtonStyle.Secondary), new ButtonBuilder().setCustomId('set_pixKey').setLabel('Chave PIX').setStyle(ButtonStyle.Secondary), new ButtonBuilder().setCustomId('set_pixKeyType').setLabel('Tipo PIX').setStyle(ButtonStyle.Secondary) );
-    const buttons3 = new ActionRowBuilder().addComponents( new ButtonBuilder().setCustomId('set_publishChannel').setLabel('Canal Anúncio').setStyle(ButtonStyle.Secondary), new ButtonBuilder().setCustomId('set_logChannel').setLabel('Canal Logs').setStyle(ButtonStyle.Secondary) );
-    const actions = new ActionRowBuilder().addComponents( new ButtonBuilder().setCustomId('publish_raffle').setLabel('Publicar Rifa').setStyle(ButtonStyle.Success).setDisabled(!isReadyToPublish), new ButtonBuilder().setCustomId('cancel_raffle').setLabel('Cancelar').setStyle(ButtonStyle.Danger) );
+    const actions = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('publish_raffle').setLabel('Publicar Rifa').setStyle(ButtonStyle.Success).setDisabled(!isReadyToPublish),
+        new ButtonBuilder().setCustomId('cancel_raffle').setLabel('Cancelar').setStyle(ButtonStyle.Danger)
+    );
     
-    return { embeds: [embed], components: [buttons1, buttons2, buttons3, actions] };
+    return { embeds: [embed], components: [new ActionRowBuilder().addComponents(selectMenu), actions] };
 }
 
 // --- Listener Principal de Interações ---
@@ -74,76 +117,78 @@ client.on(Events.InteractionCreate, async interaction => {
     creationSessions.set(sessionId, { panelMessageId: panelMessage.id });
   }
 
+  // Lógica para o menu de configuração principal
+  if (interaction.isStringSelectMenu() && interaction.customId === 'config_raffle_menu') {
+    const sessionId = interaction.user.id;
+    const sessionData = creationSessions.get(sessionId);
+    if (!sessionData) return interaction.update({ content: 'Esta sessão de criação expirou.', embeds: [], components: [] });
+    
+    const field = interaction.values[0].replace('set_', '');
+
+    if (field === 'startTime' || field === 'endTime') {
+        const modal = new ModalBuilder().setCustomId(`datetime_modal_${field}`).setTitle(`Definir Data de ${field === 'startTime' ? 'Início' : 'Fim'}`);
+        const dayInput = new TextInputBuilder().setCustomId('day').setLabel("Dia (DD)").setStyle(TextInputStyle.Short).setPlaceholder('Ex: 01').setMinLength(2).setMaxLength(2).setRequired(true);
+        const monthInput = new TextInputBuilder().setCustomId('month').setLabel("Mês (MM)").setStyle(TextInputStyle.Short).setPlaceholder('Ex: 09').setMinLength(2).setMaxLength(2).setRequired(true);
+        const yearInput = new TextInputBuilder().setCustomId('year').setLabel("Ano (AAAA)").setStyle(TextInputStyle.Short).setPlaceholder('Ex: 2025').setMinLength(4).setMaxLength(4).setRequired(true);
+        const hourInput = new TextInputBuilder().setCustomId('hour').setLabel("Hora (HH)").setStyle(TextInputStyle.Short).setPlaceholder('Ex: 19').setMinLength(2).setMaxLength(2).setRequired(true);
+        const minuteInput = new TextInputBuilder().setCustomId('minute').setLabel("Minuto (MM)").setStyle(TextInputStyle.Short).setPlaceholder('Ex: 30').setMinLength(2).setMaxLength(2).setRequired(true);
+        modal.addComponents(new ActionRowBuilder().addComponents(dayInput), new ActionRowBuilder().addComponents(monthInput), new ActionRowBuilder().addComponents(yearInput), new ActionRowBuilder().addComponents(hourInput), new ActionRowBuilder().addComponents(minuteInput));
+        await interaction.showModal(modal);
+        return;
+    }
+
+    if (field === 'pixKeyType') {
+        const selectMenu = new StringSelectMenuBuilder().setCustomId('select_pixtype').setPlaceholder('Selecione o tipo da Chave PIX').addOptions([ { label: 'CPF / CNPJ', value: 'CPF/CNPJ' }, { label: 'Celular', value: 'Celular' }, { label: 'E-mail', value: 'E-mail' }, { label: 'Chave Aleatória', value: 'Chave Aleatória' }, { label: 'QR Code (Apenas informativo)', value: 'QR Code' } ]);
+        await interaction.reply({ content: 'Por favor, selecione o tipo da sua chave PIX:', components: [new ActionRowBuilder().addComponents(selectMenu)], ephemeral: true });
+        return;
+    }
+
+    const prompts = { title: 'Qual será o título da rifa?', description: 'Qual será a descrição?', price: 'Qual o preço por número? (Ex: 5.50)', image: 'Envie a URL da imagem.', color: 'Qual a cor da embed? (HEX, ex: #FF0000)', maxTickets: 'Qual a quantidade de tickets?', pixKey: 'Qual a Chave PIX?', publishChannel: 'Envie o ID do canal de anúncio.', logChannel: 'Envie o ID do canal de logs.', };
+    await interaction.reply({ content: prompts[field], ephemeral: true });
+    
+    const filter = (msg) => msg.author.id === interaction.user.id;
+    try {
+        const collected = await interaction.channel.awaitMessages({ filter, max: 1, time: 120000, errors: ['time'] });
+        const message = collected.first(); const content = message.content;
+        
+        // Validações
+        if (field === 'price' || field === 'maxTickets') {
+            const numValue = field === 'price' ? parseFloat(content) : parseInt(content);
+            if (isNaN(numValue) || numValue <= 0) { throw new Error('O valor deve ser um número positivo.'); }
+            sessionData[field] = numValue;
+        } else if (field === 'color') {
+            if (!/^#[0-9A-F]{6}$/i.test(content)) { throw new Error('Código de cor inválido. Use o formato HEX (ex: #FF5733).'); }
+            sessionData.color = content.toUpperCase();
+        } else if (field === 'logChannel' || field === 'publishChannel') {
+            const channel = await validateChannel(interaction, content);
+            if (!channel) return; // validateChannel já envia a resposta de erro
+            sessionData[field === 'logChannel' ? 'logChannelId' : 'publishChannelId'] = content;
+        } else { sessionData[field] = content; }
+        
+        await message.delete();
+        const dashboard = createRaffleDashboard(sessionData);
+        const panelMessage = await interaction.channel.messages.fetch(sessionData.panelMessageId);
+        await panelMessage.edit(dashboard);
+        await interaction.deleteReply();
+    } catch (error) { 
+        await interaction.followUp({ content: `❌ Erro: ${error.message}. Operação cancelada.`, ephemeral: true }).catch(()=>{});
+        await interaction.deleteReply().catch(()=>{}); 
+    }
+  }
+
+  // Listener para os botões de Publicar e Cancelar
   if (interaction.isButton()) {
     const sessionId = interaction.user.id;
     const sessionData = creationSessions.get(sessionId);
     if (!sessionData && !interaction.customId.includes('_participate') && !interaction.customId.startsWith('approve_') && !interaction.customId.startsWith('refuse_')) return;
 
-    const [action, field] = interaction.customId.split('_');
+    const [action] = interaction.customId.split('_');
 
-    switch (action) {
-      case 'set':
-        // ===================================================================
-        // NOVA LÓGICA DE DATA/HORA USANDO MODAL
-        // ===================================================================
-        if (field === 'startTime' || field === 'endTime') {
-            const modal = new ModalBuilder()
-                .setCustomId(`datetime_modal_${field}`)
-                .setTitle(`Definir Data e Hora de ${field === 'startTime' ? 'Início' : 'Fim'}`);
-
-            const dayInput = new TextInputBuilder().setCustomId('day').setLabel("Dia (DD)").setStyle(TextInputStyle.Short).setPlaceholder('Ex: 01').setMinLength(2).setMaxLength(2).setRequired(true);
-            const monthInput = new TextInputBuilder().setCustomId('month').setLabel("Mês (MM)").setStyle(TextInputStyle.Short).setPlaceholder('Ex: 09').setMinLength(2).setMaxLength(2).setRequired(true);
-            const yearInput = new TextInputBuilder().setCustomId('year').setLabel("Ano (AAAA)").setStyle(TextInputStyle.Short).setPlaceholder('Ex: 2025').setMinLength(4).setMaxLength(4).setRequired(true);
-            const hourInput = new TextInputBuilder().setCustomId('hour').setLabel("Hora (HH)").setStyle(TextInputStyle.Short).setPlaceholder('Ex: 19').setMinLength(2).setMaxLength(2).setRequired(true);
-            const minuteInput = new TextInputBuilder().setCustomId('minute').setLabel("Minuto (MM)").setStyle(TextInputStyle.Short).setPlaceholder('Ex: 30').setMinLength(2).setMaxLength(2).setRequired(true);
-
-            modal.addComponents(
-                new ActionRowBuilder().addComponents(dayInput),
-                new ActionRowBuilder().addComponents(monthInput),
-                new ActionRowBuilder().addComponents(yearInput),
-                new ActionRowBuilder().addComponents(hourInput),
-                new ActionRowBuilder().addComponents(minuteInput)
-            );
-
-            await interaction.showModal(modal);
-            return;
-        }
-
-        if (field === 'pixKeyType') {
-            const selectMenu = new StringSelectMenuBuilder().setCustomId('select_pixtype').setPlaceholder('Selecione o tipo da Chave PIX').addOptions([ { label: 'CPF / CNPJ', value: 'CPF/CNPJ' }, { label: 'Celular', value: 'Celular' }, { label: 'E-mail', value: 'E-mail' }, { label: 'Chave Aleatória', value: 'Chave Aleatória' }, { label: 'QR Code (Apenas informativo)', value: 'QR Code' } ]);
-            await interaction.reply({ content: 'Por favor, selecione o tipo da sua chave PIX:', components: [new ActionRowBuilder().addComponents(selectMenu)], ephemeral: true });
-            return;
-        }
-        const prompts = { title: 'Qual o título da rifa?', description: 'Qual a descrição?', price: 'Qual o preço por número? (Ex: 5.50)', image: 'Envie a URL da imagem.', color: 'Qual a cor da embed? (HEX, ex: #FF0000)', maxTickets: 'Qual a quantidade de tickets?', pixKey: 'Qual a Chave PIX?', publishChannel: 'Envie o ID do canal de anúncio.', logChannel: 'Envie o ID do canal de logs.', };
-        await interaction.reply({ content: prompts[field], ephemeral: true });
-        const filter = (msg) => msg.author.id === interaction.user.id;
-        try {
-            const collected = await interaction.channel.awaitMessages({ filter, max: 1, time: 120000, errors: ['time'] });
-            const message = collected.first(); const content = message.content;
-            if (field === 'price' || field === 'maxTickets') {
-                const numValue = field === 'price' ? parseFloat(content) : parseInt(content);
-                if (isNaN(numValue)) { throw new Error('Valor inválido.'); }
-                sessionData[field] = numValue;
-            } else if (field === 'color') {
-                if (!/^#[0-9A-F]{6}$/i.test(content)) { throw new Error('Código de cor inválido.'); }
-                sessionData.color = content.toUpperCase();
-            } else if (field === 'logChannel') { sessionData.logChannelId = content; } 
-            else if (field === 'publishChannel') { sessionData.publishChannelId = content; } 
-            else { sessionData[field] = content; }
-            await message.delete();
-            const dashboard = createRaffleDashboard(sessionData);
-            const panelMessage = await interaction.channel.messages.fetch(sessionData.panelMessageId);
-            await panelMessage.edit(dashboard);
-            await interaction.deleteReply();
-        } catch (error) { await interaction.deleteReply().catch(err => {}); }
-        break;
-
-      case 'publish':
-      case 'cancel':
-        const finalAction = action;
+    if (action === 'publish' || action === 'cancel') {
         const panelMessageToDel = await interaction.channel.messages.fetch(sessionData.panelMessageId).catch(() => null);
         if (panelMessageToDel) await panelMessageToDel.delete();
-        if (finalAction === 'publish') {
+        
+        if (action === 'publish') {
             const raffleId = `raffle_${Date.now()}`;
             const raffleData = { id: raffleId, ...sessionData, soldTickets: 0, creatorId: interaction.user.id, participants: new Map() };
             try {
@@ -157,60 +202,40 @@ client.on(Events.InteractionCreate, async interaction => {
               raffleData.messageId = raffleMessage.id;
               raffles.set(raffleId, raffleData);
               await interaction.reply({ content: `✅ Rifa publicada com sucesso em ${publishChannel}!`, ephemeral: true });
-            } catch (error) { await interaction.reply({ content: `❌ Erro ao publicar: Verifique se os IDs dos canais estão corretos e se o bot tem permissão.`, ephemeral: true }); }
-        } else { await interaction.reply({ content: 'Criação de rifa cancelada.', ephemeral: true }); }
+            } catch (error) { await interaction.reply({ content: `❌ Erro ao publicar. Verifique se o ID do canal está correto e se tenho permissões.`, ephemeral: true }); }
+        } else { // cancel
+            await interaction.reply({ content: 'Criação de rifa cancelada.', ephemeral: true });
+        }
         creationSessions.delete(sessionId);
-        break;
     }
   }
 
-  // ===================================================================
-  // NOVO LISTENER PARA O ENVIO DO MODAL DE DATA/HORA
-  // ===================================================================
+  // Listener para o Modal de Data/Hora
   if (interaction.isModalSubmit() && interaction.customId.startsWith('datetime_modal_')) {
     const sessionId = interaction.user.id;
     const sessionData = creationSessions.get(sessionId);
     if (!sessionData) return;
-
     const targetField = interaction.customId.split('_')[2];
-
     try {
-        const day = parseInt(interaction.fields.getTextInputValue('day'));
-        const month = parseInt(interaction.fields.getTextInputValue('month'));
-        const year = parseInt(interaction.fields.getTextInputValue('year'));
-        const hour = parseInt(interaction.fields.getTextInputValue('hour'));
-        const minute = parseInt(interaction.fields.getTextInputValue('minute'));
-        
-        // Validação simples
-        if (isNaN(day) || isNaN(month) || isNaN(year) || isNaN(hour) || isNaN(minute)) {
-            throw new Error('Todos os campos devem ser números.');
-        }
-
+        const day = parseInt(interaction.fields.getTextInputValue('day')); const month = parseInt(interaction.fields.getTextInputValue('month')); const year = parseInt(interaction.fields.getTextInputValue('year')); const hour = parseInt(interaction.fields.getTextInputValue('hour')); const minute = parseInt(interaction.fields.getTextInputValue('minute'));
+        if ([day, month, year, hour, minute].some(isNaN)) { throw new Error('Todos os campos devem ser números.'); }
         const finalDate = new Date(year, month - 1, day, hour, minute);
-        if (isNaN(finalDate.getTime())) { // Verifica se a data é válida
-            throw new Error('A data inserida é inválida.');
-        }
-
+        if (isNaN(finalDate.getTime())) { throw new Error('A data inserida é inválida.'); }
         sessionData[targetField] = finalDate;
-
         const dashboard = createRaffleDashboard(sessionData);
         const panelMessage = await interaction.channel.messages.fetch(sessionData.panelMessageId);
         await panelMessage.edit(dashboard);
-
-        await interaction.reply({ content: `✅ Data de ${targetField === 'startTime' ? 'início' : 'fim'} definida com sucesso!`, ephemeral: true });
-
-    } catch (error) {
-        await interaction.reply({ content: `❌ Erro ao processar a data: ${error.message}`, ephemeral: true });
-    }
+        await interaction.reply({ content: `✅ Data de ${targetField === 'startTime' ? 'início' : 'fim'} definida!`, ephemeral: true });
+    } catch (error) { await interaction.reply({ content: `❌ Erro ao processar a data: ${error.message}`, ephemeral: true }); }
   }
 
-
+  // Listener para outros menus (tipo de pix, quantidade de tickets)
   if (interaction.isStringSelectMenu()) {
     const sessionId = interaction.user.id;
     const sessionData = creationSessions.get(sessionId);
-    if (!sessionData) return;
-    
+
     if (interaction.customId === 'select_pixtype') {
+        if (!sessionData) return;
         sessionData.pixKeyType = interaction.values[0];
         const dashboard = createRaffleDashboard(sessionData);
         const panelMessage = await interaction.channel.messages.fetch(sessionData.panelMessageId);
@@ -230,7 +255,7 @@ client.on(Events.InteractionCreate, async interaction => {
     }
   }
 
-  // O resto do código permanece o mesmo
+  // O restante do código (participate, approve/refuse, messageCreate) permanece o mesmo.
   if (interaction.isButton() && interaction.customId.endsWith('_participate')) {
     const raffleId = interaction.customId.replace('_participate', '');
     const raffleData = raffles.get(raffleId);
@@ -247,10 +272,7 @@ client.on(Events.InteractionCreate, async interaction => {
       const row = new ActionRowBuilder().addComponents(selectMenu);
       await interaction.user.send({ content: `Olá! Você está participando da rifa **"${raffleData.title}"**. Restam **${remainingTickets}** tickets.\n\nSelecione quantos números você deseja:`, components: [row] });
       await interaction.reply({ content: 'Enviei uma mensagem no seu privado para continuarmos!', ephemeral: true });
-    } catch (error) {
-      console.error('Falha ao enviar DM:', error);
-      await interaction.reply({ content: 'Não consegui te enviar uma mensagem privada. Verifique suas configurações de privacidade.', ephemeral: true });
-    }
+    } catch (error) { await interaction.reply({ content: 'Não consegui te enviar uma mensagem privada. Verifique suas configurações de privacidade.', ephemeral: true }); }
   }
   if (interaction.isButton() && (interaction.customId.startsWith('approve_') || interaction.customId.startsWith('refuse_'))) {
     const [action, raffleId, userId] = interaction.customId.split('_');
