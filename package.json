@@ -17,6 +17,7 @@
   "license": "MIT",
   "dependencies": {
     "@discordjs/rest": "^2.6.0",
+    "@supabase/supabase-js": "^2.56.1",
     "discord-api-types": "^0.38.22",
     "discord-interactions": "^4.0.0",
     "discord.js": "^14.22.1",
