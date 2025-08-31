@@ -18,31 +18,17 @@ import {
 import 'dotenv/config';
 import { supabase } from './supabaseClient.js';
 
-// --- Configuração do Cliente ---
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.DirectMessages,
-    GatewayIntentBits.MessageContent,
-  ],
-});
-
-// --- Armazenamento em Memória ---
+const client = new Client({ intents: [ GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.DirectMessages, GatewayIntentBits.MessageContent ] });
 const creationSessions = new Map();
 
-client.once(Events.ClientReady, () => {
-  console.log(`Bot logado como ${client.user.tag}!`);
-});
-
+client.once(Events.ClientReady, () => { console.log(`Bot logado como ${client.user.tag}!`); });
 
 // --- Funções Auxiliares ---
 async function updateRaffleMessage(raffleId) {
     const { data: raffleData } = await supabase.from('raffles').select('*').eq('id', raffleId).single();
     if (!raffleData) return;
     const { data: participants } = await supabase.from('participants').select('quantity, status').eq('raffle_id', raffleId);
-    let soldTickets = 0;
-    let reservedTickets = 0;
+    let soldTickets = 0; let reservedTickets = 0;
     if (participants) {
         participants.forEach(p => {
             if (p.status === 'CONFIRMED') soldTickets += p.quantity;
@@ -65,9 +51,7 @@ async function updateRaffleMessage(raffleId) {
 }
 
 function createRaffleDashboard(sessionData) {
-    const embed = new EmbedBuilder()
-      .setColor(sessionData.color || '#5865F2')
-      .setTitle('Painel de Criação de Rifa')
+    const embed = new EmbedBuilder().setColor(sessionData.color || '#5865F2').setTitle('Painel de Criação de Rifa')
       .setDescription('Use o menu abaixo para configurar cada detalhe da rifa. Esta mensagem será apagada ao publicar ou cancelar.')
       .addFields(
           { name: '📝 Título', value: sessionData.title || 'Não definido', inline: true },
@@ -84,8 +68,7 @@ function createRaffleDashboard(sessionData) {
           { name: '🖼️ Imagem (Opcional)', value: sessionData.image || 'Nenhuma' }
       );
     const isReadyToPublish = sessionData.title && sessionData.description && sessionData.price && sessionData.maxTickets && sessionData.startTime && sessionData.endTime && sessionData.pixKey && sessionData.pixKeyType && sessionData.publishChannelId && sessionData.logChannelId;
-    const selectMenu = new StringSelectMenuBuilder().setCustomId('config_raffle_menu')
-        .setPlaceholder('Escolha um item para configurar...')
+    const selectMenu = new StringSelectMenuBuilder().setCustomId('config_raffle_menu').setPlaceholder('Escolha um item para configurar...')
         .addOptions(
             { label: 'Título', value: 'set_title' }, { label: 'Descrição', value: 'set_description' }, { label: 'Preço', value: 'set_price' },
             { label: 'Quantidade de Tickets', value: 'set_maxTickets' }, { label: 'Data de Início', value: 'set_startTime' }, { label: 'Data de Fim', value: 'set_endTime' },
@@ -102,14 +85,12 @@ function createRaffleDashboard(sessionData) {
 async function drawWinner(raffleId, interaction = null) {
     const { data: raffleData, error: raffleError } = await supabase.from('raffles').select('*').eq('id', raffleId).single();
     if (raffleError || !raffleData || raffleData.is_drawn) {
-        if (interaction) await interaction.editReply({ content: '❌ Rifa não encontrada ou já sorteada.' });
-        return;
+        if (interaction) await interaction.editReply({ content: '❌ Rifa não encontrada ou já sorteada.' }); return;
     }
     const { data: participants } = await supabase.from('participants').select('user_id, ticket_numbers').eq('raffle_id', raffleId).eq('status', 'CONFIRMED');
     const publishChannel = await client.channels.fetch(raffleData.publish_channel_id).catch(() => null);
     if (!publishChannel) {
-        if (interaction) await interaction.editReply({ content: '❌ Não foi possível encontrar o canal de anúncio desta rifa.' });
-        return;
+        if (interaction) await interaction.editReply({ content: '❌ Não foi possível encontrar o canal de anúncio desta rifa.' }); return;
     }
     try {
         const raffleMessage = await publishChannel.messages.fetch(raffleData.message_id);
@@ -129,15 +110,15 @@ async function drawWinner(raffleId, interaction = null) {
     const winner = participants.find(p => p.ticket_numbers.includes(winningNumber));
     winnerEmbed.setDescription(`O número da sorte foi **${winningNumber}**!\n\nParabéns ao grande vencedor: <@${winner.user_id}>! 🥳\n\nVocê ganhou: **${raffleData.title}**\n\nA administração entrará em contato.`);
     await publishChannel.send({ content: `Atenção, <@${winner.user_id}>!`, embeds: [winnerEmbed] });
-    if (interaction) {
-        await interaction.editReply({ content: `✅ Rifa encerrada e vencedor anunciado em ${publishChannel}!` });
-    }
+    if (interaction) await interaction.editReply({ content: `✅ Rifa encerrada e vencedor anunciado em ${publishChannel}!` });
 }
 
 // --- Listener Principal de Interações ---
 client.on(Events.InteractionCreate, async interaction => {
-  if (!interaction.inGuild()) return;
+  // A verificação global !interaction.inGuild() foi REMOVIDA daqui.
+
   if (interaction.isChatInputCommand()) {
+    if (!interaction.inGuild()) return; // Adicionada verificação local
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
         return interaction.reply({ content: '❌ Você precisa ser um administrador para usar este comando.', ephemeral: true });
     }
@@ -259,6 +240,7 @@ client.on(Events.InteractionCreate, async interaction => {
   }
 
   if (interaction.isStringSelectMenu() && interaction.customId === 'config_raffle_menu') {
+    if (!interaction.inGuild()) return;
     const sessionId = interaction.user.id;
     const sessionData = creationSessions.get(sessionId);
     if (!sessionData) return;
@@ -312,6 +294,7 @@ client.on(Events.InteractionCreate, async interaction => {
   }
   
   if (interaction.isButton() && (interaction.customId === 'publish_raffle' || interaction.customId === 'cancel_raffle')) {
+    if (!interaction.inGuild()) return;
     const sessionId = interaction.user.id;
     const sessionData = creationSessions.get(sessionId);
     if (!sessionData) return;
@@ -341,6 +324,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
   if (interaction.isModalSubmit()) {
     if (interaction.customId.startsWith('datetime_modal_')) {
+        if (!interaction.inGuild()) return;
         const sessionId = interaction.user.id;
         const sessionData = creationSessions.get(sessionId);
         if (!sessionData) return;
@@ -370,7 +354,7 @@ client.on(Events.InteractionCreate, async interaction => {
         const remainingTickets = raffleData.max_tickets - reservedAndSoldTickets;
         if (quantity > remainingTickets) { return interaction.editReply({ content: `❌ Não há tickets suficientes. Restam apenas **${remainingTickets}**.` }); }
         const totalPrice = quantity * raffleData.price;
-        const { error: insertError } = await supabase.from('participants').insert({ raffle_id: raffleId, user_id: interaction.user.id, quantity, total_price: totalPrice, status: 'PENDING_PAYMENT', guild_id: interaction.guild.id });
+        const { error: insertError } = await supabase.from('participants').insert({ raffle_id: raffleId, user_id: interaction.user.id, quantity, total_price: totalPrice, status: 'PENDING_PAYMENT', guild_id: raffleData.guild_id });
         if (insertError) { return interaction.editReply({ content: `❌ Ocorreu um erro ao registrar sua intenção.` }); }
         await updateRaffleMessage(raffleId);
         const cancelButton = new ButtonBuilder().setCustomId(`cancel_purchase_${raffleId}`).setLabel('Cancelar Compra').setStyle(ButtonStyle.Danger);
@@ -380,6 +364,7 @@ client.on(Events.InteractionCreate, async interaction => {
   
   if (interaction.isStringSelectMenu()) {
     if (interaction.customId === 'select_pixtype') {
+        if (!interaction.inGuild()) return;
         const sessionId = interaction.user.id;
         const sessionData = creationSessions.get(sessionId);
         if (!sessionData) return;
@@ -392,6 +377,7 @@ client.on(Events.InteractionCreate, async interaction => {
   }
 
   if (interaction.isButton() && interaction.customId.endsWith('_participate')) {
+    if (!interaction.inGuild()) return;
     const raffleId = interaction.customId.replace('_participate', '');
     const { data: raffleData, error } = await supabase.from('raffles').select('*').eq('id', raffleId).single();
     if (error || !raffleData) { return interaction.reply({ content: '❌ Esta rifa não está mais ativa.', ephemeral: true }); }
@@ -424,6 +410,7 @@ client.on(Events.InteractionCreate, async interaction => {
   }
 
   if (interaction.isButton() && (interaction.customId.startsWith('approve_') || interaction.customId.startsWith('refuse_'))) {
+    if (!interaction.inGuild()) return;
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) { return interaction.reply({ content: '❌ Apenas administradores podem fazer isso.', ephemeral: true }); }
     const parts = interaction.customId.split('_');
     const action = parts[0]; const userId = parts[parts.length - 1]; const raffleId = parts.slice(1, -1).join('_');
