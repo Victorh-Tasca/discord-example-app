@@ -1,4 +1,3 @@
-// deploy-commands.js
 import { REST } from '@discordjs/rest';
 import { Routes } from 'discord-api-types/v10';
 import { SlashCommandBuilder } from 'discord.js';
@@ -7,8 +6,33 @@ import 'dotenv/config';
 const commands = [
   new SlashCommandBuilder()
     .setName('configurar_rifa')
-    .setDescription('Abre o formulário para criar e configurar uma nova rifa.')
-    .setDMPermission(false), // Garante que o comando só pode ser usado em servidores
+    .setDescription('Abre o painel para criar e configurar uma nova rifa.'),
+    
+  new SlashCommandBuilder()
+    .setName('encerrar_rifa')
+    .setDescription('Encerra uma rifa manualmente antes do tempo previsto.')
+    .addStringOption(option => 
+      option.setName('id_da_rifa')
+        .setDescription('O ID da rifa que você deseja encerrar.')
+        .setRequired(true)),
+
+  // NOVO COMANDO RÁPIDO PARA TESTES
+  new SlashCommandBuilder()
+    .setName('rifa_rapida')
+    .setDescription('Cria uma rifa de teste com valores padrão preenchidos.')
+    .addStringOption(option =>
+      option.setName('titulo')
+        .setDescription('O título da rifa de teste.')
+        .setRequired(true))
+    .addNumberOption(option =>
+      option.setName('preco')
+        .setDescription('O preço de cada ticket.')
+        .setRequired(true))
+    .addIntegerOption(option =>
+      option.setName('tickets')
+        .setDescription('A quantidade de tickets disponíveis.')
+        .setRequired(true)),
+
 ].map(command => command.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
