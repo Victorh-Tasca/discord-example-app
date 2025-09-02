@@ -19,6 +19,7 @@ import express from 'express';
 import 'dotenv/config';
 import { supabase } from './supabaseClient.js';
 
+// --- Captura Global de Erros ---
 process.on('unhandledRejection', error => {
 	console.error('ERRO NÃO TRATADO (Promise Rejeitada):', error);
 });
@@ -26,16 +27,31 @@ process.on('uncaughtException', error => {
 	console.error('ERRO NÃO TRATADO (Exceção):', error);
 });
 
-const client = new Client({ intents: [ GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.DirectMessages, GatewayIntentBits.MessageContent ] });
+// --- Configuração do Cliente ---
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.MessageContent,
+  ],
+});
+
+// --- Armazenamento em Memória ---
 const creationSessions = new Map();
 
-client.once(Events.ClientReady, () => { console.log(`Bot logado como ${client.user.tag}!`); });
+client.once(Events.ClientReady, () => {
+  console.log(`[INICIALIZAÇÃO] Evento 'ClientReady' disparado. Bot está online!`);
+  console.log(`Bot logado como ${client.user.tag}!`);
+});
 
+// --- Funções Auxiliares ---
 async function updateRaffleMessage(raffleId) {
     const { data: raffleData } = await supabase.from('raffles').select('*').eq('id', raffleId).single();
     if (!raffleData) return;
     const { data: participants } = await supabase.from('participants').select('quantity, status').eq('raffle_id', raffleId);
-    let soldTickets = 0; let reservedTickets = 0;
+    let soldTickets = 0;
+    let reservedTickets = 0;
     if (participants) {
         participants.forEach(p => {
             if (p.status === 'CONFIRMED') soldTickets += p.quantity;
@@ -54,7 +70,9 @@ async function updateRaffleMessage(raffleId) {
             updatedEmbed.data.fields[fieldIndex].value = `${remainingTickets}/${raffleData.max_tickets}${reservedText}`;
         }
         await raffleMessage.edit({ embeds: [updatedEmbed] });
-    } catch (error) { console.error("Erro ao atualizar a mensagem da rifa:", error); }
+    } catch (error) {
+        console.error("Erro ao atualizar a mensagem da rifa:", error);
+    }
 }
 
 function createRaffleDashboard(sessionData) {
@@ -75,7 +93,8 @@ function createRaffleDashboard(sessionData) {
           { name: '🖼️ Imagem (Opcional)', value: sessionData.image || 'Nenhuma' }
       );
     const isReadyToPublish = sessionData.title && sessionData.description && sessionData.price && sessionData.maxTickets && sessionData.startTime && sessionData.endTime && sessionData.pixKey && sessionData.pixKeyType && sessionData.publishChannelId && sessionData.logChannelId;
-    const selectMenu = new StringSelectMenuBuilder().setCustomId('config_raffle_menu').setPlaceholder('Escolha um item para configurar...')
+    const selectMenu = new StringSelectMenuBuilder().setCustomId('config_raffle_menu')
+        .setPlaceholder('Escolha um item para configurar...')
         .addOptions(
             { label: 'Título', value: 'set_title' }, { label: 'Descrição', value: 'set_description' }, { label: 'Preço', value: 'set_price' },
             { label: 'Quantidade de Tickets', value: 'set_maxTickets' }, { label: 'Data de Início', value: 'set_startTime' }, { label: 'Data de Fim', value: 'set_endTime' },
@@ -245,7 +264,7 @@ client.on(Events.InteractionCreate, async interaction => {
     }
 
     if (interaction.isStringSelectMenu()) {
-        if (!interaction.inGuild() && interaction.customId !== 'select_pixtype') return; // Permitir select_pixtype em DMs se necessário, mas atualmente é de admin
+        if (!interaction.inGuild() && interaction.customId !== 'select_pixtype') return;
         if (interaction.customId === 'config_raffle_menu') {
             const sessionId = interaction.user.id;
             const sessionData = creationSessions.get(sessionId);
@@ -311,8 +330,37 @@ client.on(Events.InteractionCreate, async interaction => {
     }
   
     if (interaction.isButton()) {
+        if (!interaction.inGuild() && !interaction.customId.startsWith('select_quantity_button_') && !interaction.customId.startsWith('cancel_purchase_')) return;
+
+        if (interaction.customId === 'publish_raffle' || interaction.customId === 'cancel_raffle') {
+            const sessionId = interaction.user.id;
+            const sessionData = creationSessions.get(sessionId);
+            if (!sessionData) return;
+            const panelMessageToDel = await interaction.channel.messages.fetch(sessionData.panelMessageId).catch(() => null);
+            if (panelMessageToDel) await panelMessageToDel.delete();
+            if (interaction.customId === 'publish_raffle') {
+                const raffleId = `raffle_${Date.now()}`;
+                try {
+                  const publishChannel = await client.channels.fetch(sessionData.publishChannelId);
+                  const embed = new EmbedBuilder().setColor(sessionData.color || '#5865F2').setTitle(`🎉 Rifa: ${sessionData.title} 🎉`).setDescription(sessionData.description)
+                    .addFields( { name: '🎟️ Tickets Restantes', value: `${sessionData.maxTickets}/${sessionData.maxTickets}` }, { name: '💰 Preço por Ticket', value: `R$ ${sessionData.price.toFixed(2)}`}, { name: '▶️ Início', value: `<t:${Math.floor(sessionData.startTime.getTime() / 1000)}:f>` }, { name: '⏹️ Encerramento', value: `<t:${Math.floor(sessionData.endTime.getTime() / 1000)}:f>` })
+                    .setImage(sessionData.image || null).setFooter({ text: `ID da Rifa: ${raffleId}` });
+                  const participateButton = new ButtonBuilder().setCustomId(`${raffleId}_participate`).setLabel('Quero Participar!').setStyle(ButtonStyle.Success);
+                  const raffleMessage = await publishChannel.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(participateButton)] });
+                  await supabase.from('raffles').insert({
+                      id: raffleId, creator_id: interaction.user.id, guild_id: interaction.guild.id, message_id: raffleMessage.id, title: sessionData.title, description: sessionData.description,
+                      image_url: sessionData.image, color: sessionData.color, price: sessionData.price, max_tickets: sessionData.maxTickets,
+                      start_time: sessionData.startTime.toISOString(), end_time: sessionData.endTime.toISOString(),
+                      pix_key: sessionData.pixKey, pix_key_type: sessionData.pixKeyType,
+                      publish_channel_id: sessionData.publishChannelId, log_channel_id: sessionData.logChannelId,
+                  });
+                  await interaction.reply({ content: `✅ Rifa publicada com sucesso!`, ephemeral: true });
+                } catch (error) { await interaction.reply({ content: `❌ Erro ao publicar.`, ephemeral: true }); }
+            } else { await interaction.reply({ content: 'Criação de rifa cancelada.', ephemeral: true }); }
+            creationSessions.delete(sessionId);
+        }
+
         if (interaction.customId.endsWith('_participate')) {
-            if (!interaction.inGuild()) return;
             const raffleId = interaction.customId.replace('_participate', '');
             const { data: raffleData, error } = await supabase.from('raffles').select('*').eq('id', raffleId).single();
             if (error || !raffleData) { return interaction.reply({ content: '❌ Esta rifa não está mais ativa.', ephemeral: true }); }
@@ -413,9 +461,9 @@ client.on(Events.InteractionCreate, async interaction => {
   } catch (error) {
     console.error("ERRO CRÍTICO NA INTERAÇÃO:", error);
     if (interaction.replied || interaction.deferred) {
-        await interaction.followUp({ content: '❌ Ocorreu um erro crítico ao processar sua solicitação.', ephemeral: true });
+        await interaction.followUp({ content: '❌ Ocorreu um erro ao processar sua solicitação.', ephemeral: true }).catch(err => console.error("Falha ao enviar followUp de erro:", err));
     } else {
-        await interaction.reply({ content: '❌ Ocorreu um erro crítico ao processar sua solicitação.', ephemeral: true });
+        await interaction.reply({ content: '❌ Ocorreu um erro ao processar sua solicitação.', ephemeral: true }).catch(err => console.error("Falha ao enviar reply de erro:", err));
     }
   }
 });
@@ -454,41 +502,40 @@ client.on(Events.MessageCreate, async message => {
   }
 });
 
-/*
 setInterval(async () => {
-    const { data: expiredRaffles, error } = await supabase.from('raffles').select('id').lt('end_time', new Date().toISOString()).eq('is_drawn', false);
-    if (error) { console.error("Erro ao buscar rifas encerradas:", error); return; }
-    if (expiredRaffles && expiredRaffles.length > 0) {
-        console.log(`[AUTO] Encontradas ${expiredRaffles.length} rifas para sortear.`);
-        for (const raffle of expiredRaffles) {
-            await drawWinner(raffle.id);
+    try {
+        const { data: expiredRaffles, error } = await supabase.from('raffles').select('id').lt('end_time', new Date().toISOString()).eq('is_drawn', false);
+        if (error) { console.error("[AUTO] Erro ao buscar rifas encerradas:", error); return; }
+        if (expiredRaffles && expiredRaffles.length > 0) {
+            console.log(`[AUTO] Encontradas ${expiredRaffles.length} rifas para sortear.`);
+            for (const raffle of expiredRaffles) {
+                try {
+                    await drawWinner(raffle.id);
+                } catch (drawError) {
+                    console.error(`[AUTO] Falha ao sortear a rifa ${raffle.id}:`, drawError);
+                }
+            }
         }
+    } catch (err) {
+        console.error("[AUTO] Erro crítico dentro do setInterval:", err);
     }
-}, 60 * 1000); */
+}, 60 * 1000);
 
 // --- Servidor Web para Hospedagem 24/7 ---
 const app = express();
 const port = process.env.PORT || 3000;
 app.get('/', (req, res) => { res.send('Bot de Rifas está vivo e operando!'); });
-app.listen(port, '0.0.0.0', () => { console.log(`Servidor web para health check escutando na porta ${port}`); });
+app.listen(port, '0.0.0.0', () => { 
+    console.log(`[INICIALIZAÇÃO] Servidor web escutando na porta ${port}.`);
+});
 
-
-// ===================================================================
-// BLOCO DE DIAGNÓSTICO DE LOGIN
-// Substitua a linha client.login(process.env.TOKEN); por este bloco
-// ===================================================================
+// --- Bloco Final de Login ---
 const token = process.env.TOKEN;
-
 if (!token) {
-    console.error("ERRO CRÍTICO: O TOKEN não foi encontrado no arquivo .env!");
-    console.error("Verifique se o arquivo .env existe e se a variável TOKEN está definida.");
+    console.error("[INICIALIZAÇÃO] ERRO CRÍTICO: TOKEN não foi encontrado.");
 } else {
-    console.log("Token carregado com sucesso. Tentando fazer login no Discord...");
-    client.login(token).catch(error => {
-        console.error("!!!!!!!!!! ERRO AO FAZER LOGIN !!!!!!!!!!");
-        console.error("Ocorreu um erro ao tentar conectar com o Discord:");
-        console.error(error);
-        console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-        console.log("Possíveis causas: \n1. O TOKEN no arquivo .env é inválido ou expirou. \n2. As 'Privileged Intents' não estão ativadas no Portal de Desenvolvedores do Discord (verifique a Etapa 1).");
+    console.log("[INICIALIZAÇÃO] Token carregado. Tentando conectar ao Discord...");
+    client.login(token).catch(err => {
+        console.error("[INICIALIZAÇÃO] ERRO CRÍTICO AO FAZER LOGIN:", err);
     });
 }
