@@ -471,4 +471,23 @@ const port = process.env.PORT || 3000;
 app.get('/', (req, res) => { res.send('Bot de Rifas está vivo e operando!'); });
 app.listen(port, '0.0.0.0', () => { console.log(`Servidor web para health check escutando na porta ${port}`); });
 
-client.login(process.env.TOKEN);
+
+// ===================================================================
+// BLOCO DE DIAGNÓSTICO DE LOGIN
+// Substitua a linha client.login(process.env.TOKEN); por este bloco
+// ===================================================================
+const token = process.env.TOKEN;
+
+if (!token) {
+    console.error("ERRO CRÍTICO: O TOKEN não foi encontrado no arquivo .env!");
+    console.error("Verifique se o arquivo .env existe e se a variável TOKEN está definida.");
+} else {
+    console.log("Token carregado com sucesso. Tentando fazer login no Discord...");
+    client.login(token).catch(error => {
+        console.error("!!!!!!!!!! ERRO AO FAZER LOGIN !!!!!!!!!!");
+        console.error("Ocorreu um erro ao tentar conectar com o Discord:");
+        console.error(error);
+        console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+        console.log("Possíveis causas: \n1. O TOKEN no arquivo .env é inválido ou expirou. \n2. As 'Privileged Intents' não estão ativadas no Portal de Desenvolvedores do Discord (verifique a Etapa 1).");
+    });
+}
