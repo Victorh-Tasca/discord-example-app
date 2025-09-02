@@ -454,6 +454,7 @@ client.on(Events.MessageCreate, async message => {
   }
 });
 
+/*
 setInterval(async () => {
     const { data: expiredRaffles, error } = await supabase.from('raffles').select('id').lt('end_time', new Date().toISOString()).eq('is_drawn', false);
     if (error) { console.error("Erro ao buscar rifas encerradas:", error); return; }
@@ -463,7 +464,7 @@ setInterval(async () => {
             await drawWinner(raffle.id);
         }
     }
-}, 60 * 1000);
+}, 60 * 1000); */
 
 // --- Servidor Web para Hospedagem 24/7 ---
 const app = express();
